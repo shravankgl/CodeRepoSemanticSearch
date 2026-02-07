@@ -24,7 +24,7 @@ from rich.markdown import Markdown
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from config import MAX_AGENT_STEPS, BASE_DIR
+from config import MAX_AGENT_STEPS, BASE_DIR, REPOS_DIR, INDEX_DIR
 from perception import extract_perception
 from decision import generate_plan, synthesize_answer
 from action import execute_tool, format_tool_result, extract_search_results
@@ -33,6 +33,18 @@ from memory import MemoryManager
 load_dotenv()
 
 console = Console()
+
+
+def list_available_repos() -> list:
+    """List all available repositories from the repos directory."""
+    repos = []
+    if REPOS_DIR.exists():
+        for repo_dir in REPOS_DIR.iterdir():
+            if repo_dir.is_dir():
+                repo_name = repo_dir.name
+                is_indexed = (INDEX_DIR / repo_name / "index.bin").exists()
+                repos.append({"name": repo_name, "indexed": is_indexed})
+    return repos
 
 
 class RateLimiter:
@@ -85,26 +97,73 @@ async def agent_loop(session: ClientSession, tools: list, memory: MemoryManager)
     console.print(Panel(
         "[bold cyan]Code Repository Semantic Search Agent[/bold cyan]\n\n"
         "Commands:\n"
-        "  • Paste a GitHub URL to clone and index a repository\n"
-        "  • Ask questions about the code\n"
-        "  • Type 'status' to check repository status\n"
-        "  • Type 'exit' or 'quit' to exit\n",
+        "  1. Add a new repository (paste GitHub URL)\n"
+        "  2. Select/Switch repository\n"
+        "  3. Ask questions about the code\n"
+        "  4. Check repository status\n"
+        "  5. Exit\n",
         title="🔍 Welcome",
         border_style="cyan"
     ))
     
     while True:
         try:
+            # Get current repo context
+            repo_state = memory.get_repo_state()
+            prompt = f"[bold green]({repo_state.repo_name}) Query:[/bold green] " if repo_state.repo_name else "[bold green]Query:[/bold green] "
+            
             # Get user input
             console.print()
-            user_input = console.input("[bold green]You:[/bold green] ").strip()
+            user_input = console.input(prompt).strip()
             
             if not user_input:
                 continue
             
-            if user_input.lower() in ['exit', 'quit', 'q']:
+            if user_input.lower() in ['exit', 'quit', 'q', '5']:
                 console.print("[yellow]👋 Goodbye![/yellow]")
                 break
+            
+            # Handle "switch" command directly without LLM
+            if user_input.lower() in ['2', 'switch', 'switch repo']:
+                repos = list_available_repos()
+                if not repos:
+                    console.print("[yellow]No repositories found. Add one first![/yellow]")
+                    continue
+                
+                # Show list and prompt for selection
+                console.print("\n[bold cyan]📁 Select a Repository:[/bold cyan]")
+                for i, repo in enumerate(repos, 1):
+                    status = "[green]✓ indexed[/green]" if repo["indexed"] else "[yellow]○ not indexed[/yellow]"
+                    console.print(f"  {i}. {repo['name']} {status}")
+                selection = console.input("\n[bold green]Enter number or name:[/bold green] ").strip()
+                
+                # Parse selection
+                repo_name = None
+                if selection.isdigit():
+                    idx = int(selection) - 1
+                    if 0 <= idx < len(repos):
+                        repo_name = repos[idx]["name"]
+                else:
+                    repo_name = selection
+                
+                if repo_name:
+                    repo_path = REPOS_DIR / repo_name
+                    if repo_path.exists():
+                        is_indexed = (INDEX_DIR / repo_name / "index.bin").exists()
+                        memory.set_repo_state(
+                            repo_name=repo_name,
+                            is_cloned=True,
+                            is_indexed=is_indexed
+                        )
+                        memory.init_vector_memory(repo_name)
+                        
+                        # Also sync MCP server state by calling load_repository tool
+                        await execute_tool(session, tools, f"FUNCTION_CALL: load_repository|repo_name={repo_name}")
+                        
+                        console.print(f"[green]✓ Loaded repository: {repo_name}[/green]")
+                    else:
+                        console.print(f"[red]Repository '{repo_name}' not found.[/red]")
+                continue
             
             # Store user message
             memory.add_message("user", user_input)
@@ -200,6 +259,21 @@ async def agent_loop(session: ClientSession, tools: list, memory: MemoryManager)
                         elif result.tool_name == "search_code":
                             # Extract search results for answer synthesis
                             last_search_results = extract_search_results(result)
+                        
+                        elif result.tool_name == "load_repository":
+                            try:
+                                data = json.loads(result.result)
+                                if data.get("success"):
+                                    memory.set_repo_state(
+                                        repo_name=data.get("repo_name"),
+                                        is_cloned=True,
+                                        is_indexed=data.get("chunk_count", 0) > 0,
+                                        chunk_count=data.get("chunk_count", 0)
+                                    )
+                                    # Initialize vector memory for this repo
+                                    memory.init_vector_memory(data.get("repo_name"))
+                            except:
+                                pass
                         
                     else:
                         console.print(f"[red]✗ Tool error: {result.error}[/red]")

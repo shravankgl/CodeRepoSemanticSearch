@@ -511,6 +511,52 @@ def load_repository(repo_name: str) -> str:
         })
 
 
+@mcp.tool()
+def list_indexed_repos() -> str:
+    """
+    List all repositories that have been cloned and indexed.
+    
+    Returns:
+        List of repositories with their indexing status
+    """
+    mcp_log("LIST_REPOS", "Listing available repositories")
+    
+    try:
+        repos = []
+        
+        # Check repos directory
+        if REPOS_DIR.exists():
+            for curr_dir in REPOS_DIR.iterdir():
+                if curr_dir.is_dir():
+                    repo_name = curr_dir.name
+                    
+                    # Check if indexed
+                    is_indexed = False
+                    index_path = INDEX_DIR / repo_name / "index.bin"
+                    if index_path.exists():
+                        is_indexed = True
+                        
+                    repos.append({
+                        "name": repo_name,
+                        "is_indexed": is_indexed
+                    })
+        
+        return json.dumps({
+            "success": True,
+            "repositories": repos,
+            "count": len(repos),
+            "message": f"Found {len(repos)} repositories"
+        })
+        
+    except Exception as e:
+        mcp_log("ERROR", f"List repos failed: {e}")
+        return json.dumps({
+            "success": False,
+            "error": str(e),
+            "message": f"Failed to list repositories: {e}"
+        })
+
+
 if __name__ == "__main__":
     mcp_log("INFO", "Starting Code Repository Search MCP server...")
     mcp.run(transport="stdio")

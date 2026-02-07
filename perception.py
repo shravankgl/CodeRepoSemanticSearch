@@ -46,13 +46,15 @@ The agent can:
 4. Get file contents
 5. List files in the repository
 6. Get repository status
+7. List available repositories
+8. Load a repository
 
 Analyze this user input: "{user_input}"
 
 Return a JSON object with these fields:
-- "intent": One of: "clone_repo", "index_repo", "search_code", "get_file", "list_files", "get_status", "explain", "general_question"
-- "entities": List of important entities (repo URL, file paths, search terms, etc.)
-- "tool_hint": The most likely MCP tool to use: "clone_repository", "index_repository", "search_code", "get_file_content", "list_files", "get_repo_status", or null
+- "intent": One of: "clone_repo", "index_repo", "search_code", "get_file", "list_files", "get_status", "list_repos", "load_repo", "explain", "general_question"
+- "entities": List of important entities (repo URL, file paths, search terms, repo names, etc.)
+- "tool_hint": The most likely MCP tool to use: "clone_repository", "index_repository", "search_code", "get_file_content", "list_files", "get_repo_status", "list_indexed_repos", "load_repository", or null
 - "repo_url": If a GitHub URL is present, extract it here, otherwise null
 
 Examples:
@@ -67,6 +69,15 @@ Examples:
 
 4. Input: "Show me the main.py file"
    Output: {{"intent": "get_file", "entities": ["main.py"], "tool_hint": "get_file_content", "repo_url": null}}
+
+5. Input: "List all repositories"
+   Output: {{"intent": "list_repos", "entities": [], "tool_hint": "list_indexed_repos", "repo_url": null}}
+
+6. Input: "Load flask repo"
+   Output: {{"intent": "load_repo", "entities": ["flask"], "tool_hint": "load_repository", "repo_url": null}}
+
+7. Input: "2"
+   Output: {{"intent": "list_repos", "entities": [], "tool_hint": "list_indexed_repos", "repo_url": null}}
 
 Return ONLY the JSON object, no additional text or markdown."""
 
@@ -136,10 +147,38 @@ def extract_perception_simple(user_input: str) -> PerceptionResult:
     tool_hint = None
     entities = []
     
-    if repo_url:
+    # Check for numbered shortcuts
+    stripped_input = user_input.strip()
+    if stripped_input == "1":
+        intent = "clone_repo"
+        tool_hint = "clone_repository"
+    elif stripped_input == "2":
+        intent = "list_repos"
+        tool_hint = "list_indexed_repos"
+    elif stripped_input == "3":
+        intent = "load_repo"
+        tool_hint = "load_repository"
+    elif stripped_input == "4":
+        intent = "search_code"
+        tool_hint = "search_code"
+    elif stripped_input == "5":
+        intent = "get_status"
+        tool_hint = "get_repo_status"
+    elif repo_url:
         intent = "clone_repo"
         tool_hint = "clone_repository"
         entities = [repo_url]
+    elif any(word in user_lower for word in ["list repositories", "show repos", "list repos", "available repos"]):
+        intent = "list_repos"
+        tool_hint = "list_indexed_repos"
+    elif any(word in user_lower for word in ["load repo", "use repo", "switch to"]):
+        intent = "load_repo"
+        tool_hint = "load_repository"
+        # Extract repo name
+        parts = user_input.split()
+        if len(parts) > 1:
+            # Assume last word is repo name if not obvious
+            entities = [parts[-1]]
     elif any(word in user_lower for word in ["index", "indexing", "build index"]):
         intent = "index_repo"
         tool_hint = "index_repository"
